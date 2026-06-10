@@ -21,7 +21,17 @@ enum PopClipExtension {
         }
         let extName = (config["name"] as? String)
             ?? bundleURL.deletingPathExtension().lastPathComponent
-        let options = defaultOptionValues(config)
+        var options = defaultOptionValues(config)
+
+        // 用户可在扩展目录里放 popbar-options.json(平面 key:value)覆盖选项默认值,
+        // 例如 {"site": "zh.wikipedia.org"}
+        let overrideURL = bundleURL.appendingPathComponent("popbar-options.json")
+        if let data = try? Data(contentsOf: overrideURL),
+           let overrides = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for (key, value) in overrides {
+                options[key.lowercased()] = "\(value)"
+            }
+        }
 
         // 单动作直接定义在顶层;多动作放在 actions 数组里
         let actionDicts: [[String: Any]]
@@ -64,18 +74,25 @@ enum PopClipExtension {
         return nil
     }
 
-    /// 提取扩展 options 的默认值(defaultValue 优先,multiple 类型取 values 第一项)
+    /// 提取扩展 options 的默认值(defaultValue 优先,multiple 类型取 values 第一项)。
+    /// 同时兼容新格式(identifier/defaultValue/values)和
+    /// 老 plist 格式(Option Identifier / Option Default Value / Option Values)。
     private static func defaultOptionValues(_ config: [String: Any]) -> [String: String] {
         var out: [String: String] = [:]
         for option in (config["options"] as? [[String: Any]]) ?? [] {
-            guard let id = (option["identifier"] as? String)?.lowercased() else { continue }
-            if let dv = option["defaultvalue"] {
+            let identifier = (option["identifier"] ?? option["option identifier"]) as? String
+            guard let id = identifier?.lowercased() else { continue }
+            let defaultValue = option["defaultvalue"]
+                ?? option["default value"]
+                ?? option["option default value"]
+            if let dv = defaultValue {
                 if let b = dv as? Bool {
                     out[id] = b ? "1" : "0"
                 } else {
                     out[id] = "\(dv)"
                 }
-            } else if let values = option["values"] as? [Any], let first = values.first {
+            } else if let values = (option["values"] ?? option["option values"]) as? [Any],
+                      let first = values.first {
                 out[id] = "\(first)"
             } else {
                 out[id] = ""
@@ -156,17 +173,24 @@ enum PopClipExtension {
     private static func makeAction(_ dict: [String: Any], extName: String,
                                    bundleURL: URL, options: [String: String]) -> PopAction? {
         let title = (dict["title"] as? String) ?? extName
-        let icon = (dict["icon"] as? String).flatMap { name -> NSImage? in
+        let iconName = (dict["icon"] ?? dict["image file"]) as? String   // 老 plist 格式用 Image File
+        let icon = iconName.flatMap { name -> NSImage? in
             // PopClip 的文本图标(如 "square filled A")不含扩展名,暂不支持
             guard name.contains(".") else { return nil }
             return NSImage(contentsOf: bundleURL.appendingPathComponent(name))
         }
 
         if let urlTemplate = dict["url"] as? String {
-            // PopClip 用 *** 作为 URL 编码后选中文本的占位符
-            let template = urlTemplate
+            // PopClip 用 *** 作为 URL 编码后选中文本的占位符;
+            // {popclip option x} 占位符按选项默认值在加载时替换(如 Wikipedia 的站点域名)
+            var template = urlTemplate
                 .replacingOccurrences(of: "***", with: "{text}")
                 .replacingOccurrences(of: "{popclip text}", with: "{text}")
+            for (key, value) in options {
+                template = template.replacingOccurrences(of: "{popclip option \(key)}",
+                                                         with: value,
+                                                         options: .caseInsensitive)
+            }
             return URLPluginAction(title: title, icon: icon, template: template)
         }
 
@@ -174,7 +198,8 @@ enum PopClipExtension {
             return PopClipShellAction(title: title, icon: icon,
                                       scriptURL: bundleURL.appendingPathComponent(scriptFile),
                                       interpreter: dict["interpreter"] as? String,
-                                      workingDirectory: bundleURL)
+                                      workingDirectory: bundleURL,
+                                      options: options)
         }
 
         if let scriptFile = dict["applescript file"] as? String,
@@ -220,6 +245,7 @@ struct PopClipShellAction: PopAction {
     let scriptURL: URL
     let interpreter: String?
     let workingDirectory: URL
+    var options: [String: String] = [:]
 
     func perform(with text: String) {
         let process = Process()
@@ -234,6 +260,9 @@ struct PopClipShellAction: PopAction {
         var env = ProcessInfo.processInfo.environment
         env["POPCLIP_TEXT"] = text   // PopClip 官方约定的环境变量
         env["POPBAR_TEXT"] = text
+        for (key, value) in options {
+            env["POPCLIP_OPTION_\(key.uppercased())"] = value   // PopClip 官方约定
+        }
         process.environment = env
         try? process.run()
     }
