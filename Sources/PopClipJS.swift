@@ -22,7 +22,11 @@ enum PopClipJSEngine {
                             options: [String: String]) -> [PopAction] {
         guard var source = try? String(contentsOf: scriptURL, encoding: .utf8) else { return [] }
 
-        if scriptURL.pathExtension.lowercased() == "ts" {
+        // .ts 一律转译;.js 若用 ES Module 语法(export/import)也走转译转成 CommonJS
+        let isTS = scriptURL.pathExtension.lowercased() == "ts"
+        let usesESM = source.range(of: #"^\s*(export|import)\s"#,
+                                   options: .regularExpression) != nil
+        if isTS || usesESM {
             guard let js = transpileTypeScript(source) else {
                 // 编译器还没就绪(正在下载),下载完成后会自动重载扩展
                 return []
@@ -49,6 +53,10 @@ enum PopClipJSEngine {
             NSLog("PopClip JS 扩展 \(extName) 没有通过 defineExtension/module.exports 导出定义")
             return []
         }
+
+        // 模块导出的 options 数组写入 popclip.options 默认值
+        context.objectForKeyedSubscript("__popbar_applyOptionDefaults")?
+            .call(withArguments: [definition])
 
         // actions 数组,或单个 action,或定义本身就是动作
         var actionValues: [JSValue] = []
@@ -128,6 +136,59 @@ enum PopClipJSEngine {
         var __popbar_definition = null;
         function defineExtension(d) { __popbar_definition = d; }
         var module = { exports: {} };
+        var exports = module.exports;
+        // 模块导出的 options 数组 → 写入 popclip.options 默认值(保留原始类型)
+        function __popbar_applyOptionDefaults(def) {
+          if (!def || !Array.isArray(def.options)) { return; }
+          for (var i = 0; i < def.options.length; i++) {
+            var opt = def.options[i];
+            if (!opt || !opt.identifier) { continue; }
+            if (popclip.options[opt.identifier] !== undefined) { continue; }
+            if (opt.defaultValue !== undefined) {
+              popclip.options[opt.identifier] = opt.defaultValue;
+            } else if (Array.isArray(opt.values) && opt.values.length > 0) {
+              popclip.options[opt.identifier] = opt.values[0];
+            } else if (opt.type === "boolean") {
+              popclip.options[opt.identifier] = false;
+            } else {
+              popclip.options[opt.identifier] = "";
+            }
+          }
+        }
+        // JSC 没有 URL / URLSearchParams(WebKit API),给个够用的最小实现
+        if (typeof URLSearchParams === "undefined") {
+          globalThis.URLSearchParams = class {
+            constructor() { this._pairs = []; }
+            append(k, v) { this._pairs.push([String(k), String(v)]); }
+            set(k, v) {
+              this._pairs = this._pairs.filter(function (p) { return p[0] !== String(k); });
+              this.append(k, v);
+            }
+            get(k) {
+              var hit = this._pairs.find(function (p) { return p[0] === String(k); });
+              return hit ? hit[1] : null;
+            }
+            toString() {
+              return this._pairs.map(function (p) {
+                return encodeURIComponent(p[0]) + "=" + encodeURIComponent(p[1]);
+              }).join("&");
+            }
+          };
+        }
+        if (typeof URL === "undefined") {
+          globalThis.URL = class {
+            constructor(href) {
+              this._base = String(href);
+              this.searchParams = new URLSearchParams();
+            }
+            get href() {
+              var q = this.searchParams.toString();
+              if (!q) { return this._base; }
+              return this._base + (this._base.indexOf("?") >= 0 ? "&" : "?") + q;
+            }
+            toString() { return this.href; }
+          };
+        }
         var popclip = {
           input: { text: "", html: "", markdown: "", matchedText: "", data: {} },
           context: { hasFormatting: false, canPaste: true, canCopy: true, canCut: false },
@@ -205,7 +266,8 @@ enum PopClipJSEngine {
     private static var compilerDownloadInFlight = false
 
     private static func transpileTypeScript(_ source: String) -> String? {
-        let digest = SHA256.hash(data: Data(source.utf8))
+        // 盐随转译配置变更而变,避免命中旧配置的缓存
+        let digest = SHA256.hash(data: Data(("v2|" + source).utf8))
             .map { String(format: "%02x", $0) }.joined()
         let cached = transpileCacheDirectory.appendingPathComponent("\(digest).js")
         if let js = try? String(contentsOf: cached, encoding: .utf8) {
@@ -229,7 +291,10 @@ enum PopClipJSEngine {
         (function () {
           var compiler = (typeof ts !== "undefined") ? ts : module.exports;
           return compiler.transpileModule(__popbar_src, {
-            compilerOptions: { target: compiler.ScriptTarget.ES2022 }
+            compilerOptions: {
+              target: compiler.ScriptTarget.ES2022,
+              module: compiler.ModuleKind.CommonJS
+            }
           }).outputText;
         })()
         """)
@@ -284,14 +349,20 @@ final class PopClipJSAction: PopAction {
 
     func perform(with text: String) {
         DispatchQueue.main.async {
+            let popclip = self.context.objectForKeyedSubscript("popclip")
             let input = JSValue(newObjectIn: self.context)
             input?.setObject(text, forKeyedSubscript: "text" as NSString)
             input?.setObject("", forKeyedSubscript: "html" as NSString)
             input?.setObject(text, forKeyedSubscript: "matchedText" as NSString)
             // popclip.input 同步更新,两种取文本写法都兼容
-            self.context.objectForKeyedSubscript("popclip")?
-                .setObject(input, forKeyedSubscript: "input" as NSString)
-            self.function.call(withArguments: input.map { [$0] } ?? [])
+            popclip?.setObject(input, forKeyedSubscript: "input" as NSString)
+
+            // PopClip 的 action 签名是 (input, options, context)
+            var arguments: [Any] = []
+            if let input { arguments.append(input) }
+            if let options = popclip?.objectForKeyedSubscript("options") { arguments.append(options) }
+            if let ctx = popclip?.objectForKeyedSubscript("context") { arguments.append(ctx) }
+            self.function.call(withArguments: arguments)
         }
     }
 }

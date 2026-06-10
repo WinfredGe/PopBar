@@ -151,10 +151,23 @@ private struct ActionSettingsView: View {
             }
             .listStyle(.inset)
 
-            Text("提示:安装新插件后,新功能会自动出现在列表末尾并默认启用。")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(12)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("提示:安装新插件后,新功能会自动出现在列表末尾并默认启用。")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                HStack {
+                    Link(destination: URL(string: "https://www.popclip.app/extensions/")!) {
+                        Label("浏览 PopClip 扩展库,下载更多插件…", systemImage: "puzzlepiece.extension")
+                            .font(.caption)
+                    }
+                    Spacer()
+                    Button("打开扩展目录") {
+                        NSWorkspace.shared.open(PluginManager.shared.extensionsDirectory)
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(12)
         }
         .frame(minWidth: 320, minHeight: 380)
     }
