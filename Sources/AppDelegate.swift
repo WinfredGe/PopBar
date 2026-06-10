@@ -48,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                            accessibilityDescription: "PopBar")
         let menu = NSMenu()
         menu.delegate = self
+        menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "打开扩展目录", action: #selector(openExtensionsFolder), keyEquivalent: "")
         menu.addItem(withTitle: "重新加载扩展", action: #selector(reloadPlugins), keyEquivalent: "r")
         menu.addItem(.separator())
@@ -75,6 +77,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         } catch {
             NSLog("切换开机自启动失败: \(error.localizedDescription)")
+        }
+    }
+
+    @objc private func openSettings() {
+        Task { @MainActor in
+            SettingsWindowController.shared.show()
         }
     }
 
