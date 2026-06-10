@@ -34,6 +34,8 @@ final class PluginManager {
     static let shared = PluginManager()
 
     private(set) var actions: [PopAction] = []
+    /// 有扩展需要富文本 HTML 时,划词会额外走 ⌘C 读取剪贴板 HTML
+    private(set) var needsHTMLCapture = false
 
     let extensionsDirectory: URL = {
         let dir = FileManager.default
@@ -45,6 +47,7 @@ final class PluginManager {
 
     func loadAll() {
         actions = []
+        needsHTMLCapture = false
         let fm = FileManager.default
         extractArchives()
         guard let bundles = try? fm.contentsOfDirectory(at: extensionsDirectory,
@@ -62,6 +65,9 @@ final class PluginManager {
                     actions.append(action)
                 }
             case "popclipext":
+                if bundleURL.lastPathComponent.contains("copy-as-markdown") {
+                    needsHTMLCapture = true
+                }
                 actions.append(contentsOf: PopClipExtension.load(bundleURL: bundleURL))
             default:
                 break
@@ -107,8 +113,8 @@ final class PluginManager {
 
     private func makeAction(manifest: PluginManifest, bundleURL: URL) -> PopAction? {
         let icon = manifest.icon.flatMap {
-            NSImage(contentsOf: bundleURL.appendingPathComponent($0))
-        }
+            ActionIcon.load(fileName: $0, bundleURL: bundleURL)
+        } ?? ActionIcon.fallback(for: manifest.name)
         switch manifest.type {
         case "url":
             guard let template = manifest.url else { return nil }
@@ -130,8 +136,8 @@ struct URLPluginAction: PopAction {
     let icon: NSImage?
     let template: String
 
-    func perform(with text: String) {
-        let encoded = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+    func perform(with selection: SelectionPayload) {
+        let encoded = selection.text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         guard let url = URL(string: template.replacingOccurrences(of: "{text}", with: encoded)) else { return }
         NSWorkspace.shared.open(url)
     }
@@ -144,12 +150,12 @@ struct ShellPluginAction: PopAction {
     let icon: NSImage?
     let scriptURL: URL
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = [scriptURL.path]
         var env = ProcessInfo.processInfo.environment
-        env["POPBAR_TEXT"] = text
+        env["POPBAR_TEXT"] = selection.text
         process.environment = env
         try? process.run()
     }

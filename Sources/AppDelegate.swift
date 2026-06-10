@@ -13,10 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupStatusItem()
         PluginManager.shared.loadAll()
 
-        monitor.onSelection = { [weak self] text, mouseLocation in
+        monitor.onSelection = { [weak self] selection in
             guard let self else { return }
             let actions = ActionRegistry.actions()
-            self.popup.show(text: text, near: mouseLocation, actions: actions)
+            self.popup.show(selection: selection, actions: actions)
         }
         monitor.start()
     }

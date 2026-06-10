@@ -18,7 +18,7 @@ enum PopClipJSEngine {
 
     // MARK: 入口
 
-    static func loadActions(scriptURL: URL, extName: String,
+    static func loadActions(scriptURL: URL, bundleURL: URL, extName: String,
                             options: [String: String]) -> [PopAction] {
         guard var source = try? String(contentsOf: scriptURL, encoding: .utf8) else { return [] }
 
@@ -85,9 +85,10 @@ enum PopClipJSEngine {
             let title = value.objectForKeyedSubscript("title").flatMap {
                 $0.isString ? $0.toString() : nil
             } ?? extName
-            let icon = value.objectForKeyedSubscript("icon").flatMap {
-                $0.isString ? makeIcon($0.toString()) : nil
+            let iconSpec = value.objectForKeyedSubscript("icon").flatMap {
+                $0.isString ? $0.toString() : nil
             }
+            let icon = makeIcon(iconSpec, title: title, bundleURL: bundleURL)
             return PopClipJSAction(title: title, icon: icon, context: context, function: fn)
         }
     }
@@ -97,11 +98,18 @@ enum PopClipJSEngine {
         return value.isObject && JSObjectIsFunction(value.context.jsGlobalContextRef, value.jsValueRef)
     }
 
-    /// 支持 "symbol:xxx" 形式的 SF Symbols 图标;PopClip 文本图标暂不支持
-    private static func makeIcon(_ spec: String?) -> NSImage? {
-        guard let spec, spec.hasPrefix("symbol:") else { return nil }
-        let name = String(spec.dropFirst("symbol:".count))
-        return NSImage(systemSymbolName: name, accessibilityDescription: nil)
+    /// symbol:xxx → SF Symbol;*.png/*.svg → 从扩展包加载
+    private static func makeIcon(_ spec: String?, title: String, bundleURL: URL) -> NSImage {
+        if let spec, spec.hasPrefix("symbol:") {
+            let name = String(spec.dropFirst("symbol:".count))
+            if let img = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+                return ActionIcon.sized(img)
+            }
+        }
+        if let spec, spec.contains(".") {
+            if let img = ActionIcon.load(fileName: spec, bundleURL: bundleURL) { return img }
+        }
+        return ActionIcon.fallback(for: title)
     }
 
     // MARK: PopClip API 子集
@@ -347,13 +355,13 @@ final class PopClipJSAction: PopAction {
         self.function = function
     }
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         DispatchQueue.main.async {
             let popclip = self.context.objectForKeyedSubscript("popclip")
             let input = JSValue(newObjectIn: self.context)
-            input?.setObject(text, forKeyedSubscript: "text" as NSString)
-            input?.setObject("", forKeyedSubscript: "html" as NSString)
-            input?.setObject(text, forKeyedSubscript: "matchedText" as NSString)
+            input?.setObject(selection.text, forKeyedSubscript: "text" as NSString)
+            input?.setObject(selection.html ?? "", forKeyedSubscript: "html" as NSString)
+            input?.setObject(selection.text, forKeyedSubscript: "matchedText" as NSString)
             // popclip.input 同步更新,两种取文本写法都兼容
             popclip?.setObject(input, forKeyedSubscript: "input" as NSString)
 

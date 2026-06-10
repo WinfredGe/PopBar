@@ -20,15 +20,16 @@ final class PopupPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     }
 
-    func show(text: String, near point: NSPoint, actions: [PopAction]) {
+    func show(selection: SelectionPayload, actions: [PopAction]) {
         hide()
 
-        let bar = BarView(actions: actions, text: text) { [weak self] in self?.hide() }
+        let bar = BarView(actions: actions, selection: selection) { [weak self] in self?.hide() }
         panel.contentView = bar
         let size = bar.fittingSize
         panel.setContentSize(size)
 
         // 出现在选区上方居中,并夹在屏幕内
+        let point = selection.location
         var origin = NSPoint(x: point.x - size.width / 2, y: point.y + 16)
         if let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }) {
             origin.x = max(screen.visibleFrame.minX + 4,
@@ -50,10 +51,17 @@ final class PopupPanelController {
     }
 
     private func installDismissBehavior() {
-        // 点击别处 / 滚动 / 切 App → 收起
-        if let global = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .scrollWheel],
-            handler: { [weak self] _ in self?.hide() }) {
+        // 本地监听:只有点击其他窗口时才收起,工具条内点击交给按钮
+        if let local = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.window !== self.panel { self.hide() }
+            return event
+        } {
+            dismissMonitors.append(local)
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel]) { [weak self] _ in
+            self?.hide()
+        } {
             dismissMonitors.append(global)
         }
         hideTimer = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
@@ -66,7 +74,7 @@ final class PopupPanelController {
 
 private final class BarView: NSView {
 
-    init(actions: [PopAction], text: String, dismiss: @escaping () -> Void) {
+    init(actions: [PopAction], selection: SelectionPayload, dismiss: @escaping () -> Void) {
         super.init(frame: .zero)
         wantsLayer = true
 
@@ -87,16 +95,21 @@ private final class BarView: NSView {
         blur.addSubview(stack)
 
         for action in actions {
-            let button = FirstMouseButton(title: action.title, target: nil, action: nil)
+            let fullTitle = action.displayTitle(for: selection.text)
+            let button = FirstMouseButton(title: "", target: nil, action: nil)
             button.bezelStyle = .accessoryBarAction
-            button.font = .systemFont(ofSize: 12, weight: .medium)
-            if let icon = action.icon {
-                button.image = icon
-                button.imagePosition = .imageLeading
-            }
+            button.image = ActionIcon.forToolbar(action: action)
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyDown
+            button.toolTip = fullTitle
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 28),
+                button.heightAnchor.constraint(equalToConstant: 26),
+            ])
             button.onClick = {
+                action.perform(with: selection)
                 dismiss()
-                action.perform(with: text)
             }
             stack.addArrangedSubview(button)
         }

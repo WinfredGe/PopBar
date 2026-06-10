@@ -15,6 +15,13 @@ import Cocoa
 enum PopClipExtension {
 
     static func load(bundleURL: URL) -> [PopAction] {
+        // Copy as Markdown 依赖 npm 模块,用原生实现替代 JS 版
+        if bundleURL.lastPathComponent.contains("copy-as-markdown") {
+            let icon = ActionIcon.load(fileName: ">md.png", bundleURL: bundleURL)
+                ?? ActionIcon.fallback(for: "Copy as Markdown")
+            return [CopyAsMarkdownAction(icon: icon)]
+        }
+
         guard let config = readConfig(bundleURL: bundleURL) else {
             NSLog("PopClip 扩展无法解析: \(bundleURL.lastPathComponent)")
             return []
@@ -52,7 +59,7 @@ enum PopClipExtension {
 
         // 静态配置没产出动作时,尝试 JS/TS 模块(popclip.app 上的新扩展大多是这种)
         if loaded.isEmpty, let scriptURL = findJSModule(bundleURL: bundleURL, config: config) {
-            loaded = PopClipJSEngine.loadActions(scriptURL: scriptURL,
+            loaded = PopClipJSEngine.loadActions(scriptURL: scriptURL, bundleURL: bundleURL,
                                                  extName: extName, options: options)
         }
         if loaded.isEmpty {
@@ -172,12 +179,16 @@ enum PopClipExtension {
 
     private static func makeAction(_ dict: [String: Any], extName: String,
                                    bundleURL: URL, options: [String: String]) -> PopAction? {
-        let title = (dict["title"] as? String) ?? extName
+        let title = resolveLocalizedString(dict["title"]) ?? extName
         let iconName = (dict["icon"] ?? dict["image file"]) as? String   // 老 plist 格式用 Image File
-        let icon = iconName.flatMap { name -> NSImage? in
-            // PopClip 的文本图标(如 "square filled A")不含扩展名,暂不支持
+        let icon: NSImage? = iconName.flatMap { name -> NSImage? in
             guard name.contains(".") else { return nil }
-            return NSImage(contentsOf: bundleURL.appendingPathComponent(name))
+            return ActionIcon.load(fileName: name, bundleURL: bundleURL)
+        } ?? ActionIcon.fallback(for: title)
+
+        // Word Count:标题含 {popclip wordcount},按钮上动态显示字数
+        if title.localizedCaseInsensitiveContains("{popclip wordcount}") {
+            return WordCountAction(titleTemplate: title, icon: icon)
         }
 
         if let urlTemplate = dict["url"] as? String {
@@ -215,6 +226,19 @@ enum PopClipExtension {
         return nil
     }
 
+    /// 解析 PopClip 多语言标题(字符串或 {"en": "...", "fr": "..."})
+    private static func resolveLocalizedString(_ value: Any?) -> String? {
+        if let s = value as? String { return s }
+        if let dict = value as? [String: Any] {
+            let locale = Locale.preferredLanguages.first?.prefix(2).lowercased() ?? "en"
+            if let match = dict.first(where: { $0.key.lowercased().hasPrefix(locale) })?.value as? String {
+                return match
+            }
+            return dict["en"] as? String ?? dict.values.compactMap { $0 as? String }.first
+        }
+        return nil
+    }
+
     // MARK: 极简 YAML 解析
     //
     // 只支持顶层 `key: value` 标量——经典的 url / shell 型扩展配置都是平面结构。
@@ -237,6 +261,54 @@ enum PopClipExtension {
     }
 }
 
+// MARK: - Word Count(动态标题)
+
+struct WordCountAction: PopAction {
+    let titleTemplate: String
+    let icon: NSImage?
+    let id = "popclip.wordcount"
+    var title: String { "Word Count" }
+
+    func displayTitle(for text: String) -> String {
+        let count = Self.countWords(in: text)
+        // 简短显示,避免按钮过宽
+        return "\(count) 词"
+    }
+
+    func perform(with selection: SelectionPayload) {
+        let count = Self.countWords(in: selection.text)
+        Task { @MainActor in
+            TranslationPanelController.shared.showPlainText("\(count) 个单词", near: selection.location)
+        }
+    }
+
+    private static func countWords(in text: String) -> Int {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return 0 }
+        return trimmed.split { $0.isWhitespace || $0.isNewline }.count
+    }
+}
+
+// MARK: - Copy as Markdown(原生实现,替代依赖 npm 的 JS 版)
+
+struct CopyAsMarkdownAction: PopAction {
+    let icon: NSImage?
+    let id = "popclip.copy-as-markdown"
+    let title = "Copy as Markdown"
+
+    func perform(with selection: SelectionPayload) {
+        let markdown: String
+        if let html = selection.html, !html.isEmpty {
+            markdown = HTMLToMarkdown.convert(html)
+        } else {
+            markdown = selection.text
+        }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(markdown, forType: .string)
+    }
+}
+
 // MARK: - PopClip 风格 shell 动作
 
 struct PopClipShellAction: PopAction {
@@ -247,7 +319,7 @@ struct PopClipShellAction: PopAction {
     let workingDirectory: URL
     var options: [String: String] = [:]
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         let process = Process()
         if let interpreter, !interpreter.isEmpty {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -258,8 +330,8 @@ struct PopClipShellAction: PopAction {
         }
         process.currentDirectoryURL = workingDirectory
         var env = ProcessInfo.processInfo.environment
-        env["POPCLIP_TEXT"] = text   // PopClip 官方约定的环境变量
-        env["POPBAR_TEXT"] = text
+        env["POPCLIP_TEXT"] = selection.text
+        env["POPBAR_TEXT"] = selection.text
         for (key, value) in options {
             env["POPCLIP_OPTION_\(key.uppercased())"] = value   // PopClip 官方约定
         }
@@ -279,14 +351,14 @@ struct PopClipAppleScriptAction: PopAction {
     let scriptTemplate: String
     let options: [String: String]
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         // AppleScript 字符串字面量转义
         func escape(_ s: String) -> String {
             s.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
         }
 
-        var script = scriptTemplate.replacingOccurrences(of: "{popclip text}", with: escape(text))
+        var script = scriptTemplate.replacingOccurrences(of: "{popclip text}", with: escape(selection.text))
         for (key, value) in options {
             script = script.replacingOccurrences(of: "{popclip option \(key)}",
                                                  with: escape(value))

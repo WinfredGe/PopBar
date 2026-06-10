@@ -7,11 +7,14 @@ protocol PopAction {
     var id: String { get }
     var title: String { get }
     var icon: NSImage? { get }
-    func perform(with text: String)
+    /// 工具条按钮标题(默认固定 title;Word Count 等扩展按选中文本动态生成)
+    func displayTitle(for text: String) -> String
+    func perform(with selection: SelectionPayload)
 }
 
 extension PopAction {
     var id: String { "action.\(title)" }
+    func displayTitle(for text: String) -> String { title }
 }
 
 enum ActionRegistry {
@@ -35,12 +38,12 @@ enum ActionRegistry {
 struct CopyAction: PopAction {
     let id = "builtin.copy"
     let title = "复制"
-    let icon = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+    let icon: NSImage? = ActionIcon.fallback(for: "复制")
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        pb.setString(selection.text, forType: .string)
     }
 }
 
@@ -49,11 +52,11 @@ struct CopyAction: PopAction {
 struct TranslateAction: PopAction {
     let id = "builtin.translate"
     let title = "翻译"
-    let icon = NSImage(systemSymbolName: "character.bubble", accessibilityDescription: nil)
+    let icon: NSImage? = ActionIcon.fallback(for: "翻译")
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         Task { @MainActor in
-            TranslationPanelController.shared.translate(text, near: NSEvent.mouseLocation)
+            TranslationPanelController.shared.translate(selection.text, near: selection.location)
         }
     }
 }
@@ -63,12 +66,12 @@ struct TranslateAction: PopAction {
 struct ClaudeWebAction: PopAction {
     let id = "builtin.claude"
     let title = "Claude"
-    let icon = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+    let icon: NSImage? = ActionIcon.fallback(for: "Claude")
 
-    func perform(with text: String) {
+    func perform(with selection: SelectionPayload) {
         // claude.ai/new?q=... 会带着文本新建一个对话
         var components = URLComponents(string: "https://claude.ai/new")!
-        components.queryItems = [URLQueryItem(name: "q", value: "请翻译如下文本：\n\n" + text)]
+        components.queryItems = [URLQueryItem(name: "q", value: "请翻译如下文本：\n\n" + selection.text)]
         if let url = components.url {
             NSWorkspace.shared.open(url)
         }
