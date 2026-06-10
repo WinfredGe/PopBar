@@ -35,6 +35,13 @@ final class TranslationPanelController: ObservableObject {
     private let dismissMargin: CGFloat = 60
     private var proximityTimer: Timer?
 
+    /// 直接显示一段文本(不翻译),供 JS 扩展的 popclip.showText 使用
+    func showPlainText(_ text: String, near point: NSPoint) {
+        sourceText = ""        // 空 source,translationTask 会跳过
+        resultText = text
+        present(near: point)
+    }
+
     func translate(_ text: String, near point: NSPoint) {
         sourceText = text
         resultText = nil
@@ -47,7 +54,10 @@ final class TranslationPanelController: ObservableObject {
             // 同一语言对再次翻译:invalidate 让 translationTask 重新执行
             configuration?.invalidate()
         }
+        present(near: point)
+    }
 
+    private func present(near point: NSPoint) {
         var origin = NSPoint(x: point.x - 190, y: point.y - panel.frame.height - 24)
         if let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }) {
             let visible = screen.visibleFrame

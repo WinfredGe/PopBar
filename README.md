@@ -49,9 +49,13 @@ MyPlugin.popext/
 可直接安装 [popclip.app/extensions](https://www.popclip.app/extensions/) 的扩展包：
 
 - 配置解析：`Config.plist` / `Config.json` / 简单结构的 `Config.yaml`（多个共存时合并）
-- 动作类型：`url`（`***` 占位符）、`shell script file`（`POPCLIP_TEXT` 环境变量、`interpreter` 字段）、`applescript` / `applescript file`（`{popclip text}`、`{popclip option x}` 占位符替换）
+- 动作类型：
+  - `url`（`***` 占位符）
+  - `shell script file`（`POPCLIP_TEXT` 环境变量、`interpreter` 字段）
+  - `applescript` / `applescript file`（`{popclip text}`、`{popclip option x}` 占位符替换）
+  - **JavaScript / TypeScript 模块**（`Config.js` / `Config.ts`）：JavaScriptCore 执行，实现了 PopClip JS API 常用子集（`defineExtension`、`popclip.input/pasteText/copyText/openUrl/showText`、`util.getRandomValues` 等）；TypeScript 首次使用时自动下载官方编译器（约 8MB，仅一次），转译结果按内容哈希缓存
 - `options` 取默认值，`requirements` 中的 `option-x=y` 按默认值筛选动作
-- 暂不支持：JavaScript 型扩展、设置界面、签名校验
+- 暂不支持：扩展设置界面、网络 API（`popclip.fetch`）、签名校验
 
 ### 安装扩展的三种方式
 

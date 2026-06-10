@@ -36,13 +36,32 @@ enum PopClipExtension {
             actionDicts = [config]
         }
 
-        let loaded = actionDicts
+        var loaded = actionDicts
             .filter { satisfiesRequirements($0, options: options) }
             .compactMap { makeAction($0, extName: extName, bundleURL: bundleURL, options: options) }
+
+        // 静态配置没产出动作时,尝试 JS/TS 模块(popclip.app 上的新扩展大多是这种)
+        if loaded.isEmpty, let scriptURL = findJSModule(bundleURL: bundleURL, config: config) {
+            loaded = PopClipJSEngine.loadActions(scriptURL: scriptURL,
+                                                 extName: extName, options: options)
+        }
         if loaded.isEmpty {
-            NSLog("PopClip 扩展 \(extName) 没有可支持的动作(支持 url / shell / applescript)")
+            NSLog("PopClip 扩展 \(extName) 没有可支持的动作(支持 url / shell / applescript / js / ts)")
         }
         return loaded
+    }
+
+    /// 查找 JS/TS 入口:config 的 module 字段优先,其次按惯例找 Config.js / Config.ts
+    private static func findJSModule(bundleURL: URL, config: [String: Any]) -> URL? {
+        let fm = FileManager.default
+        var candidates: [String] = []
+        if let module = config["module"] as? String { candidates.append(module) }
+        candidates += ["Config.js", "Config.ts", "config.js", "config.ts"]
+        for name in candidates {
+            let url = bundleURL.appendingPathComponent(name)
+            if fm.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 
     /// 提取扩展 options 的默认值(defaultValue 优先,multiple 类型取 values 第一项)
