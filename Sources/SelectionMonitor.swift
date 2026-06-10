@@ -40,12 +40,23 @@ final class SelectionMonitor {
     /// 超过该长度大概率是误触发的全选,不弹条(URL 类动作也无法承载)
     private let maxSelectionLength = 10_000
 
+    /// 前台 App 黑名单:这些 App 里 ⌘C 有副作用(如 Finder 是复制文件而非文本),
+    /// 不走剪贴板兜底;AX 取词无副作用,仍然保留
+    private let clipboardFallbackBlacklist: Set<String> = [
+        "com.apple.finder",
+        "com.apple.dock",
+        "com.apple.Photos",       // ⌘C 复制的是图片对象
+        "com.apple.iphonesimulator",
+    ]
+
     private func captureSelection(allowClipboardFallback: Bool, at point: NSPoint) {
         if let text = selectedTextViaAX(), isUsable(text) {
             onSelection?(text, point)
             return
         }
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         if allowClipboardFallback,
+           !clipboardFallbackBlacklist.contains(frontmost ?? ""),
            let text = selectedTextViaCmdC(), isUsable(text) {
             onSelection?(text, point)
         }
