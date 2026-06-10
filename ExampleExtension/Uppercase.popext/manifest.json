@@ -1,0 +1,5 @@
+{
+  "name": "转大写",
+  "type": "shell",
+  "script": "run.sh"
+}
